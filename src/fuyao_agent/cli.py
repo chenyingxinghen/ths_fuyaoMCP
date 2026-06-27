@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+
+from fuyao_agent.config import load_memory_db_path, load_settings
+from fuyao_agent.knowledge import quant_knowledge_injection
+from fuyao_agent.markdown import decode_markdown_output
+from fuyao_agent.memory import MemoryStore, extract_memory_json, format_memory_context
+from fuyao_agent.workflows import WORKFLOWS, get_workflow
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="fuyao-agent",
+        description="Query Fuyao MCP financial data with a ModelScope OpenAI-compatible LLM.",
+    )
+    parser.add_argument("question", nargs="*", help="Natural-language financial data question.")
+    parser.add_argument("--list-tools", action="store_true", help="List MCP tools and exit.")
+    parser.add_argument("--list-workflows", action="store_true", help="List built-in workflows and exit.")
+    parser.add_argument("--show-knowledge", action="store_true", help="Show injected quant knowledge base and exit.")
+    parser.add_argument("--show-config", action="store_true", help="Show non-secret runtime config and exit.")
+    parser.add_argument("--check-neutrality", help="Check text for subjective wording and exit.")
+    parser.add_argument("--memory-stats", action="store_true", help="Show local memory statistics and exit.")
+    parser.add_argument("--memory-pending", action="store_true", help="Show pending predictions and exit.")
+    parser.add_argument("--no-memory", action="store_true", help="Do not read or write local memory.")
+    parser.add_argument(
+        "--pending-limit",
+        type=int,
+        default=20,
+        help="Maximum pending predictions to include in review context.",
+    )
+    parser.add_argument(
+        "--workflow",
+        "--skill",
+        dest="workflow",
+        choices=sorted(WORKFLOWS),
+        help="Run a built-in workflow with the given question/input.",
+    )
+    parser.add_argument(
+        "--max-tool-rounds",
+        type=int,
+        default=8,
+        help="Maximum model/tool-call iterations.",
+    )
+    args = parser.parse_args()
+
+    try:
+        if args.list_workflows:
+            _print_workflows()
+            return
+
+        if args.show_knowledge:
+            print(quant_knowledge_injection())
+            return
+
+        if args.check_neutrality is not None:
+            from fuyao_agent.neutrality import neutrality_report
+
+            print(json.dumps(neutrality_report(args.check_neutrality), ensure_ascii=False, indent=2))
+            return
+
+        if args.memory_stats:
+            _print_memory_stats()
+            return
+
+        if args.memory_pending:
+            _print_pending_predictions(args.pending_limit)
+            return
+
+        settings = load_settings()
+        if args.show_config:
+            _print_config(settings)
+            return
+
+        if args.list_tools:
+            asyncio.run(_print_tools(settings))
+            return
+
+        user_input = " ".join(args.question).strip()
+        question = user_input
+        store = None if args.no_memory else MemoryStore(settings.memory_db_path)
+        if args.workflow:
+            memory_context = (
+                format_memory_context(store, args.workflow, args.pending_limit)
+                if store
+                else ""
+            )
+            question = get_workflow(args.workflow).render(user_input, memory_context)
+        elif not question:
+            parser.error("question is required unless --list-tools or --list-workflows is used")
+
+        from fuyao_agent.agent import ask_detailed
+
+        result = asyncio.run(
+            ask_detailed(settings, question, max_tool_rounds=args.max_tool_rounds),
+        )
+        answer = decode_markdown_output(result.answer)
+        print(answer)
+
+        if args.workflow and store:
+            _save_workflow_memory(
+                store,
+                args.workflow,
+                user_input,
+                answer,
+                result.observations,
+            )
+    except Exception as exc:  # noqa: BLE001 - CLI should present a concise error.
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+async def _print_tools(settings) -> None:
+    from fuyao_agent.agent import list_mcp_tools
+
+    tools = await list_mcp_tools(settings)
+    for tool in tools:
+        description = tool["description"].replace("\n", " ")
+        print(f'{tool["server"]}\t{tool["name"]}\t{description}')
+
+
+def _print_workflows() -> None:
+    for workflow in WORKFLOWS.values():
+        print(f"{workflow.name}\t{workflow.title}\t{workflow.description}")
+
+
+def _print_memory_stats() -> None:
+    store = MemoryStore(load_memory_db_path())
+    print(json.dumps(store.stats(), ensure_ascii=False, indent=2))
+
+
+def _print_pending_predictions(limit: int) -> None:
+    store = MemoryStore(load_memory_db_path())
+    print(store.pending_predictions_json(limit=limit))
+
+
+def _print_config(settings) -> None:
+    print(
+        json.dumps(
+            {
+                "env_file": settings.env_file,
+                "modelscope_base_url": settings.modelscope_base_url,
+                "modelscope_model": settings.modelscope_model,
+                "fuyao_base_url": settings.fuyao_base_url,
+                "enabled_mcp_servers": settings.enabled_mcp_servers,
+                "memory_db_path": settings.memory_db_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+
+
+def _save_workflow_memory(
+    store: MemoryStore,
+    workflow: str,
+    user_input: str,
+    answer: str,
+    observations: list[dict],
+) -> None:
+    payload = None
+    try:
+        payload = extract_memory_json(answer)
+    except json.JSONDecodeError as exc:
+        print(f"Warning: MEMORY_JSON parse failed: {exc}", file=sys.stderr)
+
+    result = store.add_run(
+        workflow=workflow,
+        user_input=user_input,
+        output=answer,
+        memory_payload=payload,
+        observations=observations,
+    )
+    print(
+        "Memory saved: "
+        f"run_id={result.run_id}, "
+        f"predictions={result.predictions_added}, "
+        f"invalid_predictions={result.invalid_predictions_added}, "
+        f"reviews={result.reviews_added}, "
+        f"invalid_reviews={result.invalid_reviews_added}, "
+        f"lessons={result.lessons_added}",
+        file=sys.stderr,
+    )
+
+
+if __name__ == "__main__":
+    main()

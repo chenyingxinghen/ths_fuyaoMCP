@@ -1,0 +1,52 @@
+{
+  "updated_at": "2026-06-27",
+  "sources": [
+    {
+      "name": "Microsoft Qlib",
+      "url": "https://github.com/microsoft/qlib",
+      "raw_readme": "https://raw.githubusercontent.com/microsoft/qlib/main/README.md",
+      "injected_focus": [
+        "full quant research workflow",
+        "data processing, model training, backtesting, analysis, online serving",
+        "alpha seeking, risk modeling, portfolio optimization, order execution",
+        "market non-stationarity and model decay",
+        "IC, information ratio, max drawdown, return distribution"
+      ]
+    },
+    {
+      "name": "AI4Finance FinRL",
+      "url": "https://github.com/AI4Finance-Foundation/FinRL",
+      "raw_readme": "https://raw.githubusercontent.com/AI4Finance-Foundation/FinRL/master/README.md",
+      "injected_focus": [
+        "market environment, DRL agent, financial application separation",
+        "train-test-trade pipeline",
+        "benchmarks such as MVO and index baselines",
+        "risk constraints and production-oriented modularity"
+      ]
+    },
+    {
+      "name": "AI4Finance FinGPT",
+      "url": "https://github.com/AI4Finance-Foundation/FinGPT",
+      "raw_readme": "https://raw.githubusercontent.com/AI4Finance-Foundation/FinGPT/master/README.md",
+      "injected_focus": [
+        "financial LLM adaptation to dynamic markets",
+        "timely data curation",
+        "retrieval-augmented generation",
+        "financial NLP tasks and benchmarks",
+        "sentiment, relation extraction, headline classification, NER"
+      ]
+    },
+    {
+      "name": "Microsoft RD-Agent",
+      "url": "https://github.com/microsoft/RD-Agent",
+      "raw_readme": "https://raw.githubusercontent.com/microsoft/RD-Agent/main/README.md",
+      "injected_focus": [
+        "hypothesis-driven R&D loop",
+        "factor-model co-optimization",
+        "data-centric quant agent workflow",
+        "experiment execution traces and feedback"
+      ]
+    }
+  ]
+}
+

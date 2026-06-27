@@ -1,0 +1,30 @@
+[project]
+name = "fuyao-modelscope-mcp-agent"
+version = "0.1.0"
+description = "A CLI agent that uses ModelScope OpenAI-compatible chat completions with Fuyao MCP financial data tools."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.9.0",
+  "openai>=1.82.0",
+  "python-dotenv>=1.0.1",
+  "tzdata>=2025.2",
+]
+
+[project.scripts]
+fuyao-agent = "fuyao_agent.cli:main"
+fuyao-agent-web = "fuyao_agent.web:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fuyao_agent"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/fuyao_agent/web_static" = "fuyao_agent/web_static"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".test-tmp", "pytest-cache-files-*"]
