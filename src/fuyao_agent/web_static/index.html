@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>智能投研系统</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/fi-chat/styles.css">
 </head>
 
 <body>
@@ -81,11 +81,9 @@
                 <span>禁用记忆</span>
               </label>
 
-              <textarea id="questionInput" placeholder="请输入您的指令，例如：深度分析近期大盘的流动性特征..."></textarea>
-
+              <textarea id="questionInput" placeholder="请输入您的指令，例如：‘给我一份贵州茅台的金融分析研报’、‘深度分析近期大盘的流动性特征、走势...’"></textarea>
               <div class="prompt-row">
-                <button class="chip-button" type="button" data-workflow="stock-analysis"
-                  data-prompt="贵州茅台">个股深度诊断</button>
+                <button class="chip-button" type="button" data-workflow="stock-analysis" data-prompt="">个股深度诊断</button>
                 <button class="chip-button" type="button" data-workflow="market-weather" data-prompt="">大盘情绪速览</button>
               </div>
 
@@ -247,7 +245,7 @@
   </div>
 
   <button type="button" id="refreshStatus" style="display:none;" aria-hidden="true"></button>
-  <script src="/app.js"></script>
+  <script src="/fi-chat/app.js"></script>
 </body>
 
 </html>

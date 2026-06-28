@@ -3,14 +3,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import mimetypes
 import sqlite3
 import sys
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+
+import uvicorn
+from starlette.applications import Starlette
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from fuyao_agent.agent import ask_detailed, list_mcp_tools
 from fuyao_agent.config import load_memory_db_path, load_settings
@@ -25,174 +29,182 @@ STATIC_ROOT = Path(__file__).with_name("web_static")
 
 
 class ApiError(Exception):
-    def __init__(self, message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
+    def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
         self.status = status
 
 
-class FuyaoWebHandler(BaseHTTPRequestHandler):
-    server_version = "FuyaoAgentWeb/0.1"
+def _optional_memory_store(path: str) -> tuple[MemoryStore | None, str | None]:
+    try:
+        return MemoryStore(path), None
+    except sqlite3.Error as exc:
+        return None, f"Memory disabled: {exc}"
 
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        if parsed.path.startswith("/api/"):
-            self._handle_api(lambda: self._get_api(parsed.path, parse_qs(parsed.query)))
-            return
-        self._serve_static(parsed.path)
 
-    def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        if not parsed.path.startswith("/api/"):
-            self._send_json({"ok": False, "error": "Unknown endpoint"}, HTTPStatus.NOT_FOUND)
-            return
-        self._handle_api(lambda: self._post_api(parsed.path, self._read_json()))
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
 
-    def log_message(self, format: str, *args: object) -> None:
-        print(f"{self.address_string()} - {format % args}")
 
-    def _handle_api(self, action: Any) -> None:
+# ── API handlers ──────────────────────────────────────────────────────────
+
+
+async def api_status(request: Request) -> JSONResponse:
+    try:
+        settings = load_settings()
+    except Exception as exc:
+        return JSONResponse(
+            {
+                "ready": False,
+                "error": str(exc),
+                "env_file": None,
+                "memory_db_path": load_memory_db_path(),
+                "workflows": sorted(WORKFLOWS),
+            }
+        )
+    return JSONResponse(
+        {
+            "ready": True,
+            "env_file": settings.env_file,
+            "modelscope_base_url": settings.modelscope_base_url,
+            "modelscope_model": settings.modelscope_model,
+            "fuyao_base_url": settings.fuyao_base_url,
+            "enabled_mcp_servers": list(settings.enabled_mcp_servers),
+            "memory_db_path": settings.memory_db_path,
+            "workflows": sorted(WORKFLOWS),
+        }
+    )
+
+
+async def api_workflows(request: Request) -> JSONResponse:
+    return JSONResponse(
+        [
+            {"name": w.name, "title": w.title, "description": w.description}
+            for w in WORKFLOWS.values()
+        ]
+    )
+
+
+async def api_tools(request: Request) -> JSONResponse:
+    settings = load_settings()
+    tools = await list_mcp_tools(settings)
+    return JSONResponse(tools)
+
+
+async def api_knowledge(request: Request) -> JSONResponse:
+    return JSONResponse({"content": quant_knowledge_injection()})
+
+
+async def api_memory_stats(request: Request) -> JSONResponse:
+    db_path = load_memory_db_path()
+    store, warning = _optional_memory_store(db_path)
+    if not store:
+        return JSONResponse(
+            {
+                "db_path": db_path,
+                "prediction_total": 0,
+                "valid_prediction_total": 0,
+                "invalid_prediction_total": 0,
+                "pending_total": 0,
+                "reviewed_total": 0,
+                "average_score": None,
+                "outcomes": {},
+                "by_scope": {},
+                "by_metric": {},
+                "by_confidence": [],
+                "evidence_trace_total": 0,
+                "predictions_with_evidence_total": 0,
+                "validation_error_total": 0,
+                "validation_errors_by_type": {},
+                "run_audit_total": 0,
+                "warning": warning,
+            }
+        )
+    payload = store.stats()
+    if warning:
+        payload["warning"] = warning
+    return JSONResponse(payload)
+
+
+async def api_memory_pending(request: Request) -> JSONResponse:
+    limit = _bounded_int(request.query_params.get("limit", "20"), 20, 1, 200)
+    store, _warning = _optional_memory_store(load_memory_db_path())
+    if not store:
+        return JSONResponse([])
+    return JSONResponse(store.pending_predictions(limit=limit))
+
+
+async def api_memory_errors(request: Request) -> JSONResponse:
+    limit = _bounded_int(request.query_params.get("limit", "20"), 20, 1, 200)
+    store, _warning = _optional_memory_store(load_memory_db_path())
+    if not store:
+        return JSONResponse([])
+    return JSONResponse(store.recent_validation_errors(limit=limit))
+
+
+async def api_memory_audits(request: Request) -> JSONResponse:
+    store, _warning = _optional_memory_store(load_memory_db_path())
+    run_id_raw = request.query_params.get("run_id")
+    if not store:
+        if run_id_raw is not None:
+            return JSONResponse(None)
+        return JSONResponse([])
+
+    if run_id_raw is not None:
         try:
-            payload = action()
-            self._send_json({"ok": True, "data": payload})
-        except ApiError as exc:
-            self._send_json({"ok": False, "error": str(exc)}, exc.status)
-        except asyncio.CancelledError as exc:
-            self._send_json(
-                {
-                    "ok": False,
-                    "error": str(exc) or "Request cancelled while waiting for upstream service",
-                },
-                HTTPStatus.GATEWAY_TIMEOUT,
-            )
-        except Exception as exc:  # noqa: BLE001 - API should return concise JSON errors.
-            self._send_json(
-                {"ok": False, "error": str(exc) or exc.__class__.__name__},
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
+            run_id = int(run_id_raw)
+        except (TypeError, ValueError):
+            raise ApiError("run_id must be an integer")
+        if run_id < 1:
+            raise ApiError("run_id must be >= 1")
+        audit = store.run_audit(run_id)
+        if audit is None:
+            raise ApiError("Run audit not found", 404)
+        return JSONResponse(audit)
 
-    def _get_api(self, path: str, query: dict[str, list[str]]) -> Any:
-        if path == "/api/status":
-            return _status_payload()
-        if path == "/api/workflows":
-            return _workflows_payload()
-        if path == "/api/tools":
-            settings = load_settings()
-            return asyncio.run(list_mcp_tools(settings))
-        if path == "/api/knowledge":
-            return {"content": quant_knowledge_injection()}
-        if path == "/api/memory/stats":
-            store, warning = _optional_memory_store(load_memory_db_path())
-            if not store:
-                return _empty_memory_stats(load_memory_db_path(), warning)
-            payload = store.stats()
-            if warning:
-                payload["warning"] = warning
-            return payload
-        if path == "/api/memory/pending":
-            limit = _int_query(query, "limit", 20, 1, 200)
-            store, _warning = _optional_memory_store(load_memory_db_path())
-            if not store:
-                return []
-            return store.pending_predictions(limit=limit)
-        if path == "/api/memory/errors":
-            limit = _int_query(query, "limit", 20, 1, 200)
-            store, _warning = _optional_memory_store(load_memory_db_path())
-            if not store:
-                return []
-            return store.recent_validation_errors(limit=limit)
-        if path == "/api/memory/audits":
-            store, _warning = _optional_memory_store(load_memory_db_path())
-            if not store:
-                return [] if "run_id" not in query else None
-            run_id = _optional_int_query(query, "run_id", 1)
-            if run_id is not None:
-                audit = store.run_audit(run_id)
-                if audit is None:
-                    raise ApiError("Run audit not found", HTTPStatus.NOT_FOUND)
-                return audit
-            limit = _int_query(query, "limit", 20, 1, 200)
-            return store.recent_run_audits(limit=limit)
-        if path == "/api/memory/performance":
-            workflow = _text_query(query, "workflow", "market-weather")
-            if workflow not in WORKFLOWS:
-                raise ApiError("Unknown workflow", HTTPStatus.BAD_REQUEST)
-            store, _warning = _optional_memory_store(load_memory_db_path())
-            if not store:
-                return {
-                    "reviewed_total": 0,
-                    "scored_total": 0,
-                    "hit_count": 0,
-                    "miss_count": 0,
-                    "unknown_count": 0,
-                    "hit_rate": None,
-                    "average_score": None,
-                    "by_metric": [],
-                    "by_confidence": [],
-                }
-            return store.workflow_performance_summary(workflow)
-        raise ApiError("Unknown endpoint", HTTPStatus.NOT_FOUND)
-
-    def _post_api(self, path: str, payload: dict[str, Any]) -> Any:
-        if path == "/api/ask":
-            return asyncio.run(_run_agent(payload))
-        if path == "/api/neutrality":
-            text = str(payload.get("text") or "")
-            return neutrality_report(text)
-        raise ApiError("Unknown endpoint", HTTPStatus.NOT_FOUND)
-
-    def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        if length <= 0:
-            return {}
-        raw = self.rfile.read(length).decode("utf-8")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ApiError(f"Invalid JSON: {exc.msg}") from exc
-        if not isinstance(payload, dict):
-            raise ApiError("Request body must be a JSON object")
-        return payload
-
-    def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status.value)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            return
-
-    def _serve_static(self, path: str) -> None:
-        relative = "index.html" if path in {"", "/"} else path.lstrip("/")
-        if relative.startswith("api/"):
-            self.send_error(HTTPStatus.NOT_FOUND.value)
-            return
-
-        target = (STATIC_ROOT / relative).resolve()
-        try:
-            target.relative_to(STATIC_ROOT.resolve())
-        except ValueError:
-            self.send_error(HTTPStatus.FORBIDDEN.value)
-            return
-
-        if not target.is_file():
-            self.send_error(HTTPStatus.NOT_FOUND.value)
-            return
-
-        body = target.read_bytes()
-        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-        self.send_response(HTTPStatus.OK.value)
-        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    limit = _bounded_int(request.query_params.get("limit", "20"), 20, 1, 200)
+    return JSONResponse(store.recent_run_audits(limit=limit))
 
 
-async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
+async def api_memory_performance(request: Request) -> JSONResponse:
+    workflow = request.query_params.get("workflow", "market-weather")
+    if workflow not in WORKFLOWS:
+        raise ApiError("Unknown workflow")
+    store, _warning = _optional_memory_store(load_memory_db_path())
+    if not store:
+        return JSONResponse(
+            {
+                "reviewed_total": 0,
+                "scored_total": 0,
+                "hit_count": 0,
+                "miss_count": 0,
+                "unknown_count": 0,
+                "hit_rate": None,
+                "average_score": None,
+                "by_metric": [],
+                "by_confidence": [],
+            }
+        )
+    return JSONResponse(store.workflow_performance_summary(workflow))
+
+
+async def api_ask(request: Request) -> JSONResponse:
+    try:
+        payload: dict[str, Any] = await request.json()
+    except json.JSONDecodeError as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"Invalid JSON: {exc.msg}"},
+            status_code=400,
+        )
+    if not isinstance(payload, dict):
+        return JSONResponse(
+            {"ok": False, "error": "Request body must be a JSON object"},
+            status_code=400,
+        )
+
     user_input = str(payload.get("question") or "").strip()
     workflow_name = str(payload.get("workflow") or "").strip()
     no_memory = bool(payload.get("no_memory"))
@@ -201,7 +213,10 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
     pending_limit = _bounded_int(payload.get("pending_limit"), 20, 1, 200)
 
     if not user_input and not workflow_name:
-        raise ApiError("Question is required")
+        return JSONResponse(
+            {"ok": False, "error": "Question is required"},
+            status_code=400,
+        )
 
     settings = load_settings()
     store = None
@@ -220,24 +235,26 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
                 similarity_threshold=settings.report_cache_similarity_threshold,
             )
             if cached:
-                return {
-                    "answer": cached["answer"],
-                    "observations": [],
-                    "observation_count": 0,
-                    "workflow": workflow_name,
-                    "memory_payload_detected": cached["memory_payload_detected"],
-                    "memory_warning": memory_warning,
-                    "memory_write": None,
-                    "report_cache": {
-                        "hit": True,
-                        "matched_run_id": cached["run_id"],
-                        "matched_question": cached["user_input"],
-                        "created_at": cached["created_at"],
-                        "similarity": cached["similarity"],
-                        "age_seconds": cached["age_seconds"],
-                        "ttl_seconds": cached["ttl_seconds"],
-                    },
-                }
+                return JSONResponse(
+                    {
+                        "answer": cached["answer"],
+                        "observations": [],
+                        "observation_count": 0,
+                        "workflow": workflow_name,
+                        "memory_payload_detected": cached["memory_payload_detected"],
+                        "memory_warning": memory_warning,
+                        "memory_write": None,
+                        "report_cache": {
+                            "hit": True,
+                            "matched_run_id": cached["run_id"],
+                            "matched_question": cached["user_input"],
+                            "created_at": cached["created_at"],
+                            "similarity": cached["similarity"],
+                            "age_seconds": cached["age_seconds"],
+                            "ttl_seconds": cached["ttl_seconds"],
+                        },
+                    }
+                )
         memory_context = (
             format_memory_context(
                 store,
@@ -287,136 +304,80 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
             "run_audit": write_result.run_audit,
         }
 
-    return {
-        "answer": answer,
-        "observations": result.observations,
-        "observation_count": len(result.observations),
-        "workflow": workflow_name or None,
-        "memory_payload_detected": memory_payload is not None,
-        "memory_warning": memory_warning,
-        "memory_write": memory_write,
-        "report_cache": {
-            "hit": False,
-            "bypassed": force_refresh,
-            "ttl_seconds": settings.report_cache_ttl_seconds,
-            "similarity_threshold": settings.report_cache_similarity_threshold,
-        },
-    }
-
-
-def _status_payload() -> dict[str, Any]:
-    try:
-        settings = load_settings()
-    except Exception as exc:  # noqa: BLE001 - status should report missing env cleanly.
-        return {
-            "ready": False,
-            "error": str(exc),
-            "env_file": None,
-            "memory_db_path": load_memory_db_path(),
-            "workflows": sorted(WORKFLOWS),
-        }
-
-    return {
-        "ready": True,
-        "env_file": settings.env_file,
-        "modelscope_base_url": settings.modelscope_base_url,
-        "modelscope_model": settings.modelscope_model,
-        "fuyao_base_url": settings.fuyao_base_url,
-        "enabled_mcp_servers": list(settings.enabled_mcp_servers),
-        "memory_db_path": settings.memory_db_path,
-        "workflows": sorted(WORKFLOWS),
-    }
-
-
-def _workflows_payload() -> list[dict[str, str]]:
-    return [
+    return JSONResponse(
         {
-            "name": workflow.name,
-            "title": workflow.title,
-            "description": workflow.description,
+            "answer": answer,
+            "observations": result.observations,
+            "observation_count": len(result.observations),
+            "workflow": workflow_name or None,
+            "memory_payload_detected": memory_payload is not None,
+            "memory_warning": memory_warning,
+            "memory_write": memory_write,
+            "report_cache": {
+                "hit": False,
+                "bypassed": force_refresh,
+                "ttl_seconds": settings.report_cache_ttl_seconds,
+                "similarity_threshold": settings.report_cache_similarity_threshold,
+            },
         }
-        for workflow in WORKFLOWS.values()
-    ]
+    )
 
 
-def _memory_store() -> MemoryStore:
+async def api_neutrality(request: Request) -> JSONResponse:
     try:
-        return MemoryStore(load_memory_db_path())
-    except sqlite3.Error as exc:
-        raise ApiError(f"Memory database unavailable: {exc}", HTTPStatus.SERVICE_UNAVAILABLE) from exc
+        payload: dict[str, Any] = await request.json()
+    except json.JSONDecodeError as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"Invalid JSON: {exc.msg}"},
+            status_code=400,
+        )
+    text = str(payload.get("text") or "")
+    return JSONResponse(neutrality_report(text))
 
 
-def _optional_memory_store(path: str) -> tuple[MemoryStore | None, str | None]:
-    try:
-        return MemoryStore(path), None
-    except sqlite3.Error as exc:
-        return None, f"Memory disabled: {exc}"
+# ── Error handlers ────────────────────────────────────────────────────────
 
 
-def _empty_memory_stats(db_path: str, warning: str | None) -> dict[str, Any]:
-    return {
-        "db_path": db_path,
-        "prediction_total": 0,
-        "valid_prediction_total": 0,
-        "invalid_prediction_total": 0,
-        "pending_total": 0,
-        "reviewed_total": 0,
-        "average_score": None,
-        "outcomes": {},
-        "by_scope": {},
-        "by_metric": {},
-        "by_confidence": [],
-        "evidence_trace_total": 0,
-        "predictions_with_evidence_total": 0,
-        "validation_error_total": 0,
-        "validation_errors_by_type": {},
-        "run_audit_total": 0,
-        "warning": warning,
-    }
+async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=exc.status)
 
 
-def _int_query(
-    query: dict[str, list[str]],
-    name: str,
-    default: int,
-    minimum: int,
-    maximum: int,
-) -> int:
-    values = query.get(name)
-    raw = values[0] if values else default
-    return _bounded_int(raw, default, minimum, maximum)
+async def starlette_http_error_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": exc.detail}, status_code=exc.status_code)
 
 
-def _text_query(query: dict[str, list[str]], name: str, default: str) -> str:
-    values = query.get(name)
-    if not values:
-        return default
-    return str(values[0] or default).strip()
+async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "error": str(exc) or exc.__class__.__name__},
+        status_code=500,
+    )
 
 
-def _optional_int_query(
-    query: dict[str, list[str]],
-    name: str,
-    minimum: int,
-) -> int | None:
-    values = query.get(name)
-    if not values:
-        return None
-    try:
-        number = int(values[0])
-    except (TypeError, ValueError) as exc:
-        raise ApiError(f"{name} must be an integer") from exc
-    if number < minimum:
-        raise ApiError(f"{name} must be >= {minimum}")
-    return number
+# ── App ───────────────────────────────────────────────────────────────────
 
-
-def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        number = default
-    return max(minimum, min(maximum, number))
+app = Starlette(
+    routes=[
+        Route("/api/status", api_status),
+        Route("/api/workflows", api_workflows),
+        Route("/api/tools", api_tools),
+        Route("/api/knowledge", api_knowledge),
+        Route("/api/memory/stats", api_memory_stats),
+        Route("/api/memory/pending", api_memory_pending),
+        Route("/api/memory/errors", api_memory_errors),
+        Route("/api/memory/audits", api_memory_audits),
+        Route("/api/memory/performance", api_memory_performance),
+        Route("/api/ask", api_ask, methods=["POST"]),
+        Route("/api/neutrality", api_neutrality, methods=["POST"]),
+        Mount("/", app=StaticFiles(directory=str(STATIC_ROOT), html=True), name="static"),
+    ],
+    exception_handlers={
+        ApiError: api_error_handler,
+        StarletteHTTPException: starlette_http_error_handler,
+        Exception: generic_error_handler,
+    },
+)
 
 
 def main() -> None:
@@ -424,22 +385,15 @@ def main() -> None:
         prog="fuyao-agent-web",
         description="Run the local Fuyao MCP agent web console.",
     )
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
-    parser.add_argument("--port", type=int, default=8765, help="Port to bind.")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind.")
+    parser.add_argument("--port", type=int, default=8084, help="Port to bind.")
     args = parser.parse_args()
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    server = ThreadingHTTPServer((args.host, args.port), FuyaoWebHandler)
-    url = f"http://{args.host}:{args.port}/"
-    print(f"Fuyao Agent Web is running at {url}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopping Fuyao Agent Web")
-    finally:
-        server.server_close()
+    print(f"Fuyao Agent Web is running at http://{args.host}:{args.port}/")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":

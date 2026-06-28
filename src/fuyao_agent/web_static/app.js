@@ -1,3 +1,5 @@
+const API_PREFIX = "/fi-chat";
+
 const state = {
   tools: [],
   workflows: [],
@@ -8,7 +10,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`${API_PREFIX}${path}`, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
@@ -16,7 +18,7 @@ async function api(path, options = {}) {
   if (!response.ok || payload.ok === false) {
     throw new Error(payload.error || `HTTP ${response.status}`);
   }
-  return payload.data;
+  return payload;
 }
 
 function escapeHtml(value) {
@@ -615,7 +617,7 @@ function activateView(name) {
   });
   if (name === "tools" && !state.tools.length) refreshTools();
   if (name === "memory") refreshMemory();
-  if (name === "knowledge" && $("#knowledgeText").textContent.includes("等待")) refreshKnowledge();
+  if (name === "knowledge" && $("#knowledgeText").textContent.includes("加载")) refreshKnowledge();
 }
 
 function bindEvents() {

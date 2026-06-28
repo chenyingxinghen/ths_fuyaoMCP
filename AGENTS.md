@@ -5,7 +5,7 @@
 | What | Command |
 |---|---|
 | Ask a question | `fuyao-agent "query"` or `python -m fuyao_agent "query"` |
-| Web UI (port :8765) | `fuyao-agent-web` |
+| Web UI (port :8084) | `fuyao-agent-web` |
 | Run workflow | `fuyao-agent --workflow market-weather "query"` or `--skill stock-analysis` |
 | List tools | `fuyao-agent --list-tools` |
 | List workflows | `fuyao-agent --list-workflows` |
