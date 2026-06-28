@@ -27,6 +27,8 @@ class Settings:
     enabled_mcp_servers: tuple[str, ...]
     memory_db_path: str
     env_file: str | None
+    report_cache_ttl_seconds: int
+    report_cache_similarity_threshold: float
 
 
 def load_settings() -> Settings:
@@ -53,6 +55,11 @@ def load_settings() -> Settings:
         enabled_mcp_servers=enabled_servers,
         memory_db_path=load_memory_db_path(),
         env_file=env_file,
+        report_cache_ttl_seconds=_env_int("FUYAO_REPORT_CACHE_TTL_SECONDS", 28800),
+        report_cache_similarity_threshold=_env_float(
+            "FUYAO_REPORT_CACHE_SIMILARITY_THRESHOLD",
+            0.78,
+        ),
     )
 
 
@@ -61,6 +68,26 @@ def _required_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
 
 
 def load_memory_db_path() -> str:
@@ -87,7 +114,7 @@ def load_project_env() -> str | None:
 
     for candidate in candidates:
         if candidate.is_file():
-            load_dotenv(candidate, override=True)
+            load_dotenv(candidate, override=False)
             return str(candidate)
     return None
 

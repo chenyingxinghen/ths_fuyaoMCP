@@ -25,6 +25,19 @@ def main() -> None:
     parser.add_argument("--check-neutrality", help="Check text for subjective wording and exit.")
     parser.add_argument("--memory-stats", action="store_true", help="Show local memory statistics and exit.")
     parser.add_argument("--memory-pending", action="store_true", help="Show pending predictions and exit.")
+    parser.add_argument("--memory-errors", action="store_true", help="Show recent memory validation errors and exit.")
+    parser.add_argument("--memory-audits", action="store_true", help="Show recent workflow run audits and exit.")
+    parser.add_argument("--memory-audit-run", type=int, help="Show run audit details for a run_id and exit.")
+    parser.add_argument(
+        "--memory-performance",
+        choices=sorted(WORKFLOWS),
+        help="Show scored review performance for a workflow and exit.",
+    )
+    parser.add_argument(
+        "--memory-context",
+        choices=sorted(WORKFLOWS),
+        help="Show the memory context that would be injected for a workflow and exit.",
+    )
     parser.add_argument("--no-memory", action="store_true", help="Do not read or write local memory.")
     parser.add_argument(
         "--pending-limit",
@@ -70,6 +83,28 @@ def main() -> None:
             _print_pending_predictions(args.pending_limit)
             return
 
+        if args.memory_errors:
+            _print_memory_errors(args.pending_limit)
+            return
+
+        if args.memory_audits:
+            _print_memory_audits(args.pending_limit)
+            return
+
+        if args.memory_audit_run is not None:
+            _print_memory_audit_run(args.memory_audit_run)
+            return
+
+        if args.memory_performance:
+            _print_memory_performance(args.memory_performance)
+            return
+
+        user_input = " ".join(args.question).strip()
+
+        if args.memory_context:
+            _print_memory_context(args.memory_context, args.pending_limit, user_input)
+            return
+
         settings = load_settings()
         if args.show_config:
             _print_config(settings)
@@ -79,18 +114,22 @@ def main() -> None:
             asyncio.run(_print_tools(settings))
             return
 
-        user_input = " ".join(args.question).strip()
         question = user_input
         store = None if args.no_memory else MemoryStore(settings.memory_db_path)
         if args.workflow:
             memory_context = (
-                format_memory_context(store, args.workflow, args.pending_limit)
+                format_memory_context(
+                    store,
+                    args.workflow,
+                    args.pending_limit,
+                    target_hint=user_input,
+                )
                 if store
                 else ""
             )
             question = get_workflow(args.workflow).render(user_input, memory_context)
         elif not question:
-            parser.error("question is required unless --list-tools or --list-workflows is used")
+            parser.error("question is required unless an exit-only flag is used")
 
         from fuyao_agent.agent import ask_detailed
 
@@ -137,6 +176,41 @@ def _print_pending_predictions(limit: int) -> None:
     print(store.pending_predictions_json(limit=limit))
 
 
+def _print_memory_errors(limit: int) -> None:
+    store = MemoryStore(load_memory_db_path())
+    print(json.dumps(store.recent_validation_errors(limit=limit), ensure_ascii=False, indent=2))
+
+
+def _print_memory_audits(limit: int) -> None:
+    store = MemoryStore(load_memory_db_path())
+    print(json.dumps(store.recent_run_audits(limit=limit), ensure_ascii=False, indent=2))
+
+
+def _print_memory_audit_run(run_id: int) -> None:
+    store = MemoryStore(load_memory_db_path())
+    audit = store.run_audit(run_id)
+    if audit is None:
+        raise RuntimeError(f"No run audit found for run_id={run_id}")
+    print(json.dumps(audit, ensure_ascii=False, indent=2))
+
+
+def _print_memory_performance(workflow: str) -> None:
+    store = MemoryStore(load_memory_db_path())
+    print(json.dumps(store.workflow_performance_summary(workflow), ensure_ascii=False, indent=2))
+
+
+def _print_memory_context(workflow: str, pending_limit: int, target_hint: str) -> None:
+    store = MemoryStore(load_memory_db_path())
+    print(
+        format_memory_context(
+            store,
+            workflow,
+            pending_limit,
+            target_hint=target_hint,
+        ),
+    )
+
+
 def _print_config(settings) -> None:
     print(
         json.dumps(
@@ -162,16 +236,19 @@ def _save_workflow_memory(
     observations: list[dict],
 ) -> None:
     payload = None
+    payload_error = None
     try:
         payload = extract_memory_json(answer)
     except json.JSONDecodeError as exc:
-        print(f"Warning: MEMORY_JSON parse failed: {exc}", file=sys.stderr)
+        payload_error = f"MEMORY_JSON parse failed: {exc}"
+        print(f"Warning: {payload_error}", file=sys.stderr)
 
     result = store.add_run(
         workflow=workflow,
         user_input=user_input,
         output=answer,
         memory_payload=payload,
+        memory_payload_error=payload_error,
         observations=observations,
     )
     print(
@@ -184,6 +261,13 @@ def _save_workflow_memory(
         f"lessons={result.lessons_added}",
         file=sys.stderr,
     )
+    for error in result.validation_errors:
+        print(
+            "Memory validation rejected "
+            f"{error.get('item_type')}[{error.get('index')}]: "
+            f"{'; '.join(error.get('errors') or [])}",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

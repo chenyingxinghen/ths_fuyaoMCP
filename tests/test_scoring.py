@@ -37,6 +37,14 @@ class ScoringTests(unittest.TestCase):
         self.assertIsNone(result.actual_value)
         self.assertIn("not numeric", result.reason)
 
+    def test_non_finite_actual_value_is_unknown(self) -> None:
+        result = score_condition(CONDITION, float("nan"))
+
+        self.assertEqual("unknown", result.outcome)
+        self.assertIsNone(result.score)
+        self.assertIsNone(result.actual_value)
+        self.assertIn("not finite", result.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

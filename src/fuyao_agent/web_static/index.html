@@ -50,8 +50,8 @@
             <span>Meta</span>
             <span>A-share</span>
             <span>Index</span>
-            <span>Forecast</span>
-            <span>Review</span>
+            <span>Stock</span>
+            <span>Memory</span>
           </div>
           <button class="icon-button" type="button" id="refreshStatus" title="刷新状态" aria-label="刷新状态">↻</button>
         </header>
@@ -79,7 +79,7 @@
                 </label>
                 <label>
                   <span>工具轮次</span>
-                  <input id="maxToolRounds" type="number" min="1" max="20" value="8">
+                  <input id="maxToolRounds" type="number" min="1" max="20" value="12">
                 </label>
                 <label>
                   <span>复盘记录</span>
@@ -94,9 +94,8 @@
               <textarea id="questionInput" rows="6" placeholder="输入需要查询或分析的 A 股问题"></textarea>
 
               <div class="prompt-row">
-                <button class="chip-button" type="button" data-prompt="查一下贵州茅台今天的行情，并说明数据时间">个股行情</button>
-                <button class="chip-button" type="button" data-workflow="market-movers" data-prompt="看最近一个交易日的市场异动">市场异动</button>
-                <button class="chip-button" type="button" data-workflow="daily-forecast" data-prompt="">每日预测</button>
+                <button class="chip-button" type="button" data-workflow="stock-analysis" data-prompt="贵州茅台">个股分析</button>
+                <button class="chip-button" type="button" data-workflow="market-weather" data-prompt="">大盘晴雨</button>
               </div>
 
               <div class="action-row">
@@ -149,6 +148,52 @@
           <div class="stats-grid" id="memoryStats"></div>
           <div class="table-panel">
             <div class="panel-heading">
+              <h2>工作流评分表现</h2>
+              <span id="performanceCount">0</span>
+            </div>
+            <div class="table-shell">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>工作流</th>
+                    <th>已评分</th>
+                    <th>Hit</th>
+                    <th>Miss</th>
+                    <th>Unknown</th>
+                    <th>命中率</th>
+                    <th>平均分</th>
+                    <th>主要指标</th>
+                  </tr>
+                </thead>
+                <tbody id="performanceTable"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="table-panel">
+            <div class="panel-heading">
+              <h2>运行审计</h2>
+              <span id="auditCount">0</span>
+            </div>
+            <div class="table-shell">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>工作流</th>
+                    <th>输出</th>
+                    <th>Memory</th>
+                    <th>预测</th>
+                    <th>工具缺口</th>
+                    <th>信号族</th>
+                    <th>拒绝</th>
+                  </tr>
+                </thead>
+                <tbody id="auditTable"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="table-panel">
+            <div class="panel-heading">
               <h2>待复盘预测</h2>
               <span id="pendingCount">0</span>
             </div>
@@ -161,10 +206,30 @@
                     <th>指标</th>
                     <th>方向</th>
                     <th>置信度</th>
+                    <th>证据工具</th>
                     <th>验证条件</th>
                   </tr>
                 </thead>
                 <tbody id="pendingTable"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="table-panel">
+            <div class="panel-heading">
+              <h2>结构拒绝记录</h2>
+              <span id="errorCount">0</span>
+            </div>
+            <div class="table-shell">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>工作流</th>
+                    <th>类型</th>
+                    <th>原因</th>
+                  </tr>
+                </thead>
+                <tbody id="errorTable"></tbody>
               </table>
             </div>
           </div>

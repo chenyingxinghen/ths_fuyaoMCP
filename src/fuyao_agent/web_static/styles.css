@@ -493,6 +493,33 @@ textarea:focus {
   line-height: 1.68;
 }
 
+.cache-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(13, 118, 110, 0.34);
+  border-radius: 6px;
+  background: rgba(13, 118, 110, 0.08);
+}
+
+.cache-banner strong,
+.cache-banner span {
+  display: block;
+}
+
+.cache-banner span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cache-banner .ghost-button {
+  flex: 0 0 auto;
+}
+
 .answer-panel h2,
 .answer-panel h3,
 .answer-panel h4 {
@@ -638,12 +665,21 @@ textarea:focus {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(136px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
 
 .table-scroll {
+  width: 100%;
+  overflow: auto;
+}
+
+.table-panel + .table-panel {
+  margin-top: 16px;
+}
+
+.table-shell {
   width: 100%;
   overflow: auto;
 }

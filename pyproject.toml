@@ -27,4 +27,5 @@ packages = ["src/fuyao_agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 norecursedirs = [".test-tmp", "pytest-cache-files-*"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +33,13 @@ def score_condition(condition_data: dict[str, Any], actual_value: Any) -> ScoreR
             score=None,
             actual_value=None,
             reason=f"actual_value is not numeric: {actual_value}",
+        )
+    if not math.isfinite(value):
+        return ScoreResult(
+            outcome="unknown",
+            score=None,
+            actual_value=None,
+            reason=f"actual_value is not finite: {actual_value}",
         )
 
     hit = _evaluate(condition, value)

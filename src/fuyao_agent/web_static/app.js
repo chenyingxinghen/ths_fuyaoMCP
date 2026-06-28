@@ -1,6 +1,7 @@
 const state = {
   tools: [],
   workflows: [],
+  cachedReportPayload: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -96,26 +97,34 @@ async function loadWorkflows() {
   }
 }
 
-async function askAgent(event) {
-  event.preventDefault();
-  const button = $("#askButton");
-  const runState = $("#runState");
-  const answerPanel = $("#answerPanel");
-  const payload = {
+function currentAskPayload() {
+  return {
     question: $("#questionInput").value.trim(),
     workflow: $("#workflowSelect").value,
     no_memory: $("#noMemory").checked,
     max_tool_rounds: Number($("#maxToolRounds").value || 8),
     pending_limit: Number($("#pendingLimit").value || 20),
   };
+}
+
+async function askAgent(event) {
+  event.preventDefault();
+  await submitAsk(currentAskPayload());
+}
+
+async function submitAsk(payload) {
+  const button = $("#askButton");
+  const runState = $("#runState");
+  const answerPanel = $("#answerPanel");
 
   if (!payload.question && !payload.workflow) {
     toast("请输入问题或选择工作流");
     return;
   }
 
-  setLoading(button, true, "运行中");
-  runState.textContent = "模型和工具运行中";
+  const isForceRefresh = Boolean(payload.force_refresh);
+  setLoading(button, true, isForceRefresh ? "重答中" : "运行中");
+  runState.textContent = isForceRefresh ? "绕过缓存，重新运行中" : "模型和工具运行中";
   answerPanel.innerHTML = `<p class="empty-state">正在等待结果。</p>`;
   renderObservations([]);
 
@@ -125,14 +134,21 @@ async function askAgent(event) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    answerPanel.innerHTML = renderMarkdown(result.answer);
+    answerPanel.innerHTML = `${renderCacheBanner(result.report_cache)}${renderMarkdown(result.answer)}`;
+    bindCacheActions(result.report_cache, payload);
     renderObservations(result.observations || []);
     $("#metricTools").textContent = String(result.observation_count || 0);
-    $("#metricMemory").textContent = result.memory_write
-      ? `run ${result.memory_write.run_id}`
-      : "未写入";
-    runState.textContent = "完成";
+    $("#metricMemory").textContent = result.report_cache?.hit
+      ? `缓存 run ${result.report_cache.matched_run_id}`
+      : result.memory_write
+        ? `run ${result.memory_write.run_id}`
+        : "未写入";
+    runState.textContent = result.report_cache?.hit ? "缓存命中" : "完成";
     if (result.memory_warning) toast(result.memory_warning);
+    if (result.memory_write?.validation_errors?.length) {
+      const count = result.memory_write.validation_errors.length;
+      toast(`记忆写入有 ${count} 条结构化记录被拒绝，请检查 MEMORY_JSON`);
+    }
     if (result.memory_write) refreshMemory(false);
   } catch (error) {
     answerPanel.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
@@ -140,6 +156,43 @@ async function askAgent(event) {
   } finally {
     setLoading(button, false);
   }
+}
+
+function renderCacheBanner(cache) {
+  if (!cache?.hit) return "";
+  const similarity = `${Math.round(Number(cache.similarity || 0) * 100)}%`;
+  const ttlText = formatDuration(cache.ttl_seconds);
+  const ageText = formatDuration(cache.age_seconds);
+  return `
+    <div class="cache-banner">
+      <div>
+        <strong>读取缓存报告</strong>
+        <span>匹配 run ${escapeHtml(cache.matched_run_id)} · 相似度 ${escapeHtml(similarity)} · 已缓存 ${escapeHtml(ageText)} / ${escapeHtml(ttlText)}</span>
+      </div>
+      <button class="ghost-button" type="button" id="forceRefreshFromCache">重新作答</button>
+    </div>
+  `;
+}
+
+function bindCacheActions(cache, payload) {
+  const button = $("#forceRefreshFromCache");
+  if (!button || !cache?.hit) {
+    state.cachedReportPayload = null;
+    return;
+  }
+  state.cachedReportPayload = { ...payload, force_refresh: true };
+  button.addEventListener("click", () => {
+    submitAsk({ ...state.cachedReportPayload });
+  });
+}
+
+function formatDuration(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return "n/a";
+  if (value < 60) return `${Math.round(value)} 秒`;
+  const minutes = Math.round(value / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  return `${(minutes / 60).toFixed(1)} 小时`;
 }
 
 function renderMarkdown(text) {
@@ -354,14 +407,27 @@ async function refreshMemory(showToast = true) {
   const button = $("#refreshMemory");
   if (showToast) setLoading(button, true, "刷新中");
   try {
-    const [stats, pending] = await Promise.all([
+    const [stats, pending, errors, audits, marketPerformance, stockPerformance] = await Promise.all([
       api("/api/memory/stats"),
       api("/api/memory/pending?limit=50"),
+      api("/api/memory/errors?limit=20"),
+      api("/api/memory/audits?limit=20"),
+      api("/api/memory/performance?workflow=market-weather"),
+      api("/api/memory/performance?workflow=stock-analysis"),
     ]);
     renderMemoryStats(stats);
+    renderPerformance([
+      { workflow: "market-weather", ...marketPerformance },
+      { workflow: "stock-analysis", ...stockPerformance },
+    ]);
+    renderAudits(audits);
     renderPending(pending);
+    renderValidationErrors(errors);
   } catch (error) {
     $("#memoryStats").innerHTML = `<div><strong>错误</strong><span>${escapeHtml(error.message)}</span></div>`;
+    $("#performanceTable").innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`;
+    $("#auditTable").innerHTML = `<tr><td colspan="8">${escapeHtml(error.message)}</td></tr>`;
+    $("#errorTable").innerHTML = `<tr><td colspan="4">${escapeHtml(error.message)}</td></tr>`;
   } finally {
     if (showToast) setLoading(button, false);
   }
@@ -374,9 +440,54 @@ function renderMemoryStats(stats) {
     ["待复盘", stats.pending_total],
     ["复盘总数", stats.reviewed_total],
     ["平均得分", stats.average_score == null ? "n/a" : Number(stats.average_score).toFixed(2)],
+    ["证据链", stats.predictions_with_evidence_total || 0],
+    ["结构拒绝", stats.validation_error_total || 0],
+    ["运行审计", stats.run_audit_total || 0],
   ];
   $("#memoryStats").innerHTML = items.map(([label, value]) => `
     <div><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>
+  `).join("");
+}
+
+function renderPerformance(rows) {
+  const body = $("#performanceTable");
+  $("#performanceCount").textContent = String(rows.length);
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8">暂无评分表现</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.workflow)}</td>
+      <td>${escapeHtml(row.scored_total ?? 0)}</td>
+      <td>${escapeHtml(row.hit_count ?? 0)}</td>
+      <td>${escapeHtml(row.miss_count ?? 0)}</td>
+      <td>${escapeHtml(row.unknown_count ?? 0)}</td>
+      <td>${escapeHtml(formatRate(row.hit_rate))}</td>
+      <td>${escapeHtml(formatScore(row.average_score))}</td>
+      <td>${escapeHtml(formatTopMetric(row.by_metric))}</td>
+    </tr>
+  `).join("");
+}
+
+function renderAudits(rows) {
+  const body = $("#auditTable");
+  $("#auditCount").textContent = String(rows.length);
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="8">暂无运行审计</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.run_id)}</td>
+      <td>${escapeHtml(row.workflow || "n/a")}</td>
+      <td>${escapeHtml(row.output_audit_status || "n/a")}</td>
+      <td>${escapeHtml(row.memory_json_status || "n/a")}</td>
+      <td>${escapeHtml(`${row.accepted_prediction_count || 0}/${row.prediction_count || 0}`)}</td>
+      <td>${escapeHtml(formatList(row.missing_tools))}</td>
+      <td>${escapeHtml(formatList(row.signal_families))}</td>
+      <td>${escapeHtml(row.validation_error_count || 0)}</td>
+    </tr>
   `).join("");
 }
 
@@ -384,7 +495,7 @@ function renderPending(rows) {
   const body = $("#pendingTable");
   $("#pendingCount").textContent = String(rows.length);
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="6">暂无待复盘预测</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7">暂无待复盘预测</td></tr>`;
     return;
   }
   body.innerHTML = rows.map((row) => `
@@ -394,9 +505,32 @@ function renderPending(rows) {
       <td>${escapeHtml(row.metric || "n/a")}</td>
       <td>${escapeHtml(row.expected_direction || "n/a")}</td>
       <td>${escapeHtml(row.confidence ?? "n/a")}</td>
+      <td>${escapeHtml(formatEvidence(row.evidence))}</td>
       <td>${escapeHtml(formatCondition(row.condition))}</td>
     </tr>
   `).join("");
+}
+
+function renderValidationErrors(rows) {
+  const body = $("#errorTable");
+  $("#errorCount").textContent = String(rows.length);
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="4">暂无结构拒绝记录</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.created_at || "n/a")}</td>
+      <td>${escapeHtml(row.workflow || "n/a")}</td>
+      <td>${escapeHtml(row.item_type || "n/a")}</td>
+      <td>${escapeHtml((row.errors || []).join("; "))}</td>
+    </tr>
+  `).join("");
+}
+
+function formatEvidence(evidence) {
+  if (!Array.isArray(evidence) || !evidence.length) return "n/a";
+  return [...new Set(evidence.map((item) => item.tool_name).filter(Boolean))].join(", ");
 }
 
 function formatCondition(condition) {
@@ -405,6 +539,27 @@ function formatCondition(condition) {
     return `${condition.metric} between ${condition.lower} and ${condition.upper}`;
   }
   return `${condition.metric} ${condition.operator} ${condition.threshold}`;
+}
+
+function formatRate(value) {
+  if (value == null) return "n/a";
+  return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function formatScore(value) {
+  if (value == null) return "n/a";
+  return Number(value).toFixed(2);
+}
+
+function formatTopMetric(items) {
+  if (!Array.isArray(items) || !items.length) return "n/a";
+  const item = items[0];
+  return `${item.key}: ${formatRate(item.hit_rate)}`;
+}
+
+function formatList(items) {
+  if (!Array.isArray(items) || !items.length) return "n/a";
+  return items.join(", ");
 }
 
 async function refreshKnowledge() {

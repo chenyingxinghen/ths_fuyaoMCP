@@ -5,6 +5,7 @@ import asyncio
 import json
 import mimetypes
 import sqlite3
+import sys
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -93,6 +94,42 @@ class FuyaoWebHandler(BaseHTTPRequestHandler):
             if not store:
                 return []
             return store.pending_predictions(limit=limit)
+        if path == "/api/memory/errors":
+            limit = _int_query(query, "limit", 20, 1, 200)
+            store, _warning = _optional_memory_store(load_memory_db_path())
+            if not store:
+                return []
+            return store.recent_validation_errors(limit=limit)
+        if path == "/api/memory/audits":
+            store, _warning = _optional_memory_store(load_memory_db_path())
+            if not store:
+                return [] if "run_id" not in query else None
+            run_id = _optional_int_query(query, "run_id", 1)
+            if run_id is not None:
+                audit = store.run_audit(run_id)
+                if audit is None:
+                    raise ApiError("Run audit not found", HTTPStatus.NOT_FOUND)
+                return audit
+            limit = _int_query(query, "limit", 20, 1, 200)
+            return store.recent_run_audits(limit=limit)
+        if path == "/api/memory/performance":
+            workflow = _text_query(query, "workflow", "market-weather")
+            if workflow not in WORKFLOWS:
+                raise ApiError("Unknown workflow", HTTPStatus.BAD_REQUEST)
+            store, _warning = _optional_memory_store(load_memory_db_path())
+            if not store:
+                return {
+                    "reviewed_total": 0,
+                    "scored_total": 0,
+                    "hit_count": 0,
+                    "miss_count": 0,
+                    "unknown_count": 0,
+                    "hit_rate": None,
+                    "average_score": None,
+                    "by_metric": [],
+                    "by_confidence": [],
+                }
+            return store.workflow_performance_summary(workflow)
         raise ApiError("Unknown endpoint", HTTPStatus.NOT_FOUND)
 
     def _post_api(self, path: str, payload: dict[str, Any]) -> Any:
@@ -159,6 +196,7 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
     user_input = str(payload.get("question") or "").strip()
     workflow_name = str(payload.get("workflow") or "").strip()
     no_memory = bool(payload.get("no_memory"))
+    force_refresh = bool(payload.get("force_refresh"))
     max_tool_rounds = _bounded_int(payload.get("max_tool_rounds"), 8, 1, 20)
     pending_limit = _bounded_int(payload.get("pending_limit"), 20, 1, 200)
 
@@ -174,8 +212,39 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
 
     if workflow_name:
         workflow = get_workflow(workflow_name)
+        if store and not force_refresh:
+            cached = store.find_cached_report(
+                workflow=workflow_name,
+                user_input=user_input,
+                ttl_seconds=settings.report_cache_ttl_seconds,
+                similarity_threshold=settings.report_cache_similarity_threshold,
+            )
+            if cached:
+                return {
+                    "answer": cached["answer"],
+                    "observations": [],
+                    "observation_count": 0,
+                    "workflow": workflow_name,
+                    "memory_payload_detected": cached["memory_payload_detected"],
+                    "memory_warning": memory_warning,
+                    "memory_write": None,
+                    "report_cache": {
+                        "hit": True,
+                        "matched_run_id": cached["run_id"],
+                        "matched_question": cached["user_input"],
+                        "created_at": cached["created_at"],
+                        "similarity": cached["similarity"],
+                        "age_seconds": cached["age_seconds"],
+                        "ttl_seconds": cached["ttl_seconds"],
+                    },
+                }
         memory_context = (
-            format_memory_context(store, workflow_name, pending_limit)
+            format_memory_context(
+                store,
+                workflow_name,
+                pending_limit,
+                target_hint=user_input,
+            )
             if store
             else ""
         )
@@ -189,11 +258,13 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
     answer = decode_markdown_output(result.answer)
 
     memory_payload = None
+    memory_payload_error = None
     if workflow_name and store:
         try:
             memory_payload = extract_memory_json(answer)
         except json.JSONDecodeError as exc:
-            memory_warning = f"MEMORY_JSON parse failed: {exc}"
+            memory_payload_error = f"MEMORY_JSON parse failed: {exc}"
+            memory_warning = memory_payload_error
 
     memory_write = None
     if workflow_name and store:
@@ -202,6 +273,7 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
             user_input=user_input,
             output=answer,
             memory_payload=memory_payload,
+            memory_payload_error=memory_payload_error,
             observations=result.observations,
         )
         memory_write = {
@@ -211,6 +283,8 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
             "reviews_added": write_result.reviews_added,
             "invalid_reviews_added": write_result.invalid_reviews_added,
             "lessons_added": write_result.lessons_added,
+            "validation_errors": write_result.validation_errors,
+            "run_audit": write_result.run_audit,
         }
 
     return {
@@ -221,6 +295,12 @@ async def _run_agent(payload: dict[str, Any]) -> dict[str, Any]:
         "memory_payload_detected": memory_payload is not None,
         "memory_warning": memory_warning,
         "memory_write": memory_write,
+        "report_cache": {
+            "hit": False,
+            "bypassed": force_refresh,
+            "ttl_seconds": settings.report_cache_ttl_seconds,
+            "similarity_threshold": settings.report_cache_similarity_threshold,
+        },
     }
 
 
@@ -286,6 +366,11 @@ def _empty_memory_stats(db_path: str, warning: str | None) -> dict[str, Any]:
         "by_scope": {},
         "by_metric": {},
         "by_confidence": [],
+        "evidence_trace_total": 0,
+        "predictions_with_evidence_total": 0,
+        "validation_error_total": 0,
+        "validation_errors_by_type": {},
+        "run_audit_total": 0,
         "warning": warning,
     }
 
@@ -300,6 +385,30 @@ def _int_query(
     values = query.get(name)
     raw = values[0] if values else default
     return _bounded_int(raw, default, minimum, maximum)
+
+
+def _text_query(query: dict[str, list[str]], name: str, default: str) -> str:
+    values = query.get(name)
+    if not values:
+        return default
+    return str(values[0] or default).strip()
+
+
+def _optional_int_query(
+    query: dict[str, list[str]],
+    name: str,
+    minimum: int,
+) -> int | None:
+    values = query.get(name)
+    if not values:
+        return None
+    try:
+        number = int(values[0])
+    except (TypeError, ValueError) as exc:
+        raise ApiError(f"{name} must be an integer") from exc
+    if number < minimum:
+        raise ApiError(f"{name} must be >= {minimum}")
+    return number
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -318,6 +427,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind.")
     parser.add_argument("--port", type=int, default=8765, help="Port to bind.")
     args = parser.parse_args()
+
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     server = ThreadingHTTPServer((args.host, args.port), FuyaoWebHandler)
     url = f"http://{args.host}:{args.port}/"
