@@ -1,75 +1,64 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Fuyao Agent Console</title>
-    <link rel="stylesheet" href="/styles.css">
-  </head>
-  <body>
-    <div class="app-shell">
-      <aside class="rail" aria-label="主导航">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">FY</div>
-          <div>
-            <strong>Fuyao Console</strong>
-            <span>MCP market agent</span>
-          </div>
-        </div>
 
-        <nav class="nav-list">
-          <button class="nav-item active" type="button" data-view-target="chat">
-            <span aria-hidden="true">01</span>问答
-          </button>
-          <button class="nav-item" type="button" data-view-target="tools">
-            <span aria-hidden="true">02</span>工具
-          </button>
-          <button class="nav-item" type="button" data-view-target="memory">
-            <span aria-hidden="true">03</span>记忆
-          </button>
-          <button class="nav-item" type="button" data-view-target="knowledge">
-            <span aria-hidden="true">04</span>知识
-          </button>
-          <button class="nav-item" type="button" data-view-target="neutrality">
-            <span aria-hidden="true">05</span>中性检查
-          </button>
-        </nav>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智能投研系统</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
 
-        <div class="rail-status">
+<body>
+  <div class="app-shell">
+    <aside class="rail">
+      <div class="brand">
+        <h1>CYXH</h1>
+        <span><a href="https://github.com/chenyingxinghen/ths_fuyaoMCP" target="_blank">开源智能投研系统</a></span>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-item active" type="button" data-view-target="chat">问答终端</button>
+        <button class="nav-item" type="button" data-view-target="tools">数据接口</button>
+        <button class="nav-item" type="button" data-view-target="memory">分析复盘</button>
+        <button class="nav-item" type="button" data-view-target="knowledge">量化知识库</button>
+        <button class="nav-item" type="button" data-view-target="neutrality">研报合规检查</button>
+      </nav>
+
+      <div class="rail-status">
+        <div class="status-indicator">
           <div class="status-dot" id="statusDot" aria-hidden="true"></div>
-          <div>
-            <strong id="statusTitle">检查中</strong>
-            <span id="statusDetail">读取本地配置</span>
-          </div>
+          <strong id="statusTitle">初始化中</strong>
         </div>
-      </aside>
+        <span id="statusDetail">请等待系统连接</span>
+      </div>
+    </aside>
 
-      <main class="workspace">
-        <header class="topbar">
-          <div class="ticker-strip" aria-label="工作流概览">
-            <span>Meta</span>
-            <span>A-share</span>
-            <span>Index</span>
-            <span>Stock</span>
-            <span>Memory</span>
-          </div>
-          <button class="icon-button" type="button" id="refreshStatus" title="刷新状态" aria-label="刷新状态">↻</button>
-        </header>
+    <main class="workspace">
+      <header class="topbar">
+        <div class="ticker-strip">
+          <span>A 股</span>
+          <span>指数</span>
+          <span>个股</span>
+          <span>记忆</span>
+        </div>
+        <button class="icon-button" type="button" id="refreshStatus" title="刷新状态">↻</button>
+      </header>
 
-        <section class="view active" id="view-chat" aria-labelledby="chatTitle">
-          <div class="view-heading">
-            <div>
-              <p class="eyebrow">Agent Run</p>
-              <h1 id="chatTitle">金融数据问答台</h1>
-            </div>
-            <div class="run-metrics" aria-label="运行指标">
-              <div><span id="metricTools">0</span><small>工具调用</small></div>
-              <div><span id="metricMemory">未写入</span><small>记忆状态</small></div>
-            </div>
-          </div>
+      <!-- 问答终端视图 -->
+      <section class="view active" id="view-chat">
+        <div class="flat-layout">
+          <div class="main-column">
+            <header class="topbar">
+              <div class="ticker-strip">
+                <span>问答终端</span>
+              </div>
+              <div class="run-metrics">
+                <div>工具调用数<span id="metricTools">0</span></div>
+                <div>记忆状态<span id="metricMemory">未写入</span></div>
+              </div>
+            </header>
 
-          <div class="chat-layout">
-            <form class="query-panel" id="askForm">
+            <form class="query-form" id="askForm">
               <div class="control-grid">
                 <label>
                   <span>工作流</span>
@@ -78,190 +67,187 @@
                   </select>
                 </label>
                 <label>
-                  <span>工具轮次</span>
+                  <span>最大调用深度</span>
                   <input id="maxToolRounds" type="number" min="1" max="20" value="12">
                 </label>
                 <label>
-                  <span>复盘记录</span>
+                  <span>复盘采样数</span>
                   <input id="pendingLimit" type="number" min="1" max="200" value="20">
-                </label>
-                <label class="toggle-row">
-                  <input id="noMemory" type="checkbox">
-                  <span>禁用记忆</span>
                 </label>
               </div>
 
-              <textarea id="questionInput" rows="6" placeholder="输入需要查询或分析的 A 股问题"></textarea>
+              <label class="toggle-row">
+                <input id="noMemory" type="checkbox">
+                <span>禁用记忆</span>
+              </label>
+
+              <textarea id="questionInput" placeholder="请输入您的指令，例如：深度分析近期大盘的流动性特征..."></textarea>
 
               <div class="prompt-row">
-                <button class="chip-button" type="button" data-workflow="stock-analysis" data-prompt="贵州茅台">个股分析</button>
-                <button class="chip-button" type="button" data-workflow="market-weather" data-prompt="">大盘晴雨</button>
+                <button class="chip-button" type="button" data-workflow="stock-analysis"
+                  data-prompt="贵州茅台">个股深度诊断</button>
+                <button class="chip-button" type="button" data-workflow="market-weather" data-prompt="">大盘情绪速览</button>
               </div>
 
               <div class="action-row">
-                <button class="primary-button" type="submit" id="askButton">运行</button>
-                <button class="ghost-button" type="button" id="clearAnswer">清空</button>
-                <span class="run-state" id="runState">待命</span>
+                <button class="primary-button" type="submit" id="askButton">开始分析</button>
+                <button class="ghost-button" type="button" id="clearAnswer">重置终端</button>
+                <span class="run-state" id="runState">系统待命</span>
               </div>
             </form>
 
-            <aside class="tool-panel" aria-label="工具调用记录">
-              <div class="panel-heading">
-                <h2>调用链</h2>
-                <span id="observationCount">0</span>
-              </div>
-              <div class="observation-list" id="observationList">
-                <p class="empty-state">暂无工具调用</p>
-              </div>
-            </aside>
+            <article class="answer-panel" id="answerPanel" aria-live="polite">
+              <p class="empty-state">分析结果将展示于此。</p>
+            </article>
           </div>
 
-          <article class="answer-panel" id="answerPanel" aria-live="polite">
-            <p class="empty-state">运行结果会显示在这里。</p>
-          </article>
-        </section>
-
-        <section class="view" id="view-tools" aria-labelledby="toolsTitle">
-          <div class="view-heading">
-            <div>
-              <p class="eyebrow">MCP Tools</p>
-              <h1 id="toolsTitle">工具目录</h1>
+          <aside class="trace-column">
+            <div class="section-header">
+              <h2>调用日志</h2>
+              <span id="observationCount">0</span>
             </div>
-            <button class="primary-button" type="button" id="refreshTools">刷新工具</button>
+            <div class="observation-list" id="observationList">
+              <p class="empty-state">暂无调用记录</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- 数据接口视图 -->
+      <section class="view" id="view-tools">
+        <header class="topbar">
+          <div class="ticker-strip">
+            <span>数据接口库</span>
           </div>
+          <button class="icon-button" type="button" id="refreshTools" title="同步可用接口">↻</button>
+        </header>
+        <div class="view-content">
           <div class="filter-row">
-            <input id="toolFilter" type="search" placeholder="按工具名、服务或描述筛选">
+            <input id="toolFilter" type="search" placeholder="检索接口名称或描述...">
           </div>
           <div class="tool-list" id="toolList">
-            <p class="empty-state">等待加载工具。</p>
+            <p class="empty-state">正在加载接口...</p>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <section class="view" id="view-memory" aria-labelledby="memoryTitle">
-          <div class="view-heading">
-            <div>
-              <p class="eyebrow">SQLite Memory</p>
-              <h1 id="memoryTitle">预测与复盘记忆</h1>
-            </div>
-            <button class="primary-button" type="button" id="refreshMemory">刷新记忆</button>
+      <!-- 分析复盘视图 -->
+      <section class="view" id="view-memory">
+        <header class="topbar">
+          <div class="ticker-strip">
+            <span>数据仓库与复盘统计</span>
           </div>
+          <button class="icon-button" type="button" id="refreshMemory" title="刷新数据">↻</button>
+        </header>
+        <div class="view-content">
           <div class="stats-grid" id="memoryStats"></div>
-          <div class="table-panel">
-            <div class="panel-heading">
-              <h2>工作流评分表现</h2>
-              <span id="performanceCount">0</span>
-            </div>
-            <div class="table-shell">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>工作流</th>
-                    <th>已评分</th>
-                    <th>Hit</th>
-                    <th>Miss</th>
-                    <th>Unknown</th>
-                    <th>命中率</th>
-                    <th>平均分</th>
-                    <th>主要指标</th>
-                  </tr>
-                </thead>
-                <tbody id="performanceTable"></tbody>
-              </table>
-            </div>
-          </div>
-          <div class="table-panel">
-            <div class="panel-heading">
-              <h2>运行审计</h2>
-              <span id="auditCount">0</span>
-            </div>
-            <div class="table-shell">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>Run</th>
-                    <th>工作流</th>
-                    <th>输出</th>
-                    <th>Memory</th>
-                    <th>预测</th>
-                    <th>工具缺口</th>
-                    <th>信号族</th>
-                    <th>拒绝</th>
-                  </tr>
-                </thead>
-                <tbody id="auditTable"></tbody>
-              </table>
-            </div>
-          </div>
-          <div class="table-panel">
-            <div class="panel-heading">
-              <h2>待复盘预测</h2>
-              <span id="pendingCount">0</span>
-            </div>
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>对象</th>
-                    <th>指标</th>
-                    <th>方向</th>
-                    <th>置信度</th>
-                    <th>证据工具</th>
-                    <th>验证条件</th>
-                  </tr>
-                </thead>
-                <tbody id="pendingTable"></tbody>
-              </table>
-            </div>
-          </div>
-          <div class="table-panel">
-            <div class="panel-heading">
-              <h2>结构拒绝记录</h2>
-              <span id="errorCount">0</span>
-            </div>
-            <div class="table-shell">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>时间</th>
-                    <th>工作流</th>
-                    <th>类型</th>
-                    <th>原因</th>
-                  </tr>
-                </thead>
-                <tbody id="errorTable"></tbody>
-              </table>
-            </div>
-          </div>
-        </section>
 
-        <section class="view" id="view-knowledge" aria-labelledby="knowledgeTitle">
-          <div class="view-heading">
-            <div>
-              <p class="eyebrow">Knowledge Base</p>
-              <h1 id="knowledgeTitle">量化知识注入</h1>
-            </div>
-            <button class="primary-button" type="button" id="refreshKnowledge">刷新知识</button>
+          <div class="table-section">
+            <h2>策略表现评估 <span id="performanceCount">0</span></h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>工作流</th>
+                  <th>样本总量</th>
+                  <th>命中</th>
+                  <th>失效</th>
+                  <th>无效</th>
+                  <th>准确率</th>
+                  <th>平均分</th>
+                  <th>主因子</th>
+                </tr>
+              </thead>
+              <tbody id="performanceTable"></tbody>
+            </table>
           </div>
-          <pre class="text-surface" id="knowledgeText">等待加载知识库。</pre>
-        </section>
 
-        <section class="view" id="view-neutrality" aria-labelledby="neutralityTitle">
-          <div class="view-heading">
-            <div>
-              <p class="eyebrow">Language Guard</p>
-              <h1 id="neutralityTitle">中性措辞检查</h1>
-            </div>
-            <button class="primary-button" type="button" id="runNeutrality">检查文本</button>
+          <div class="table-section">
+            <h2>系统运行日志 <span id="auditCount">0</span></h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>记录ID</th>
+                  <th>工作流</th>
+                  <th>结果验证</th>
+                  <th>结构检验</th>
+                  <th>预测收录</th>
+                  <th>接口缺失</th>
+                  <th>特征维度</th>
+                  <th>异常数量</th>
+                </tr>
+              </thead>
+              <tbody id="auditTable"></tbody>
+            </table>
           </div>
-          <textarea id="neutralityInput" class="wide-textarea" rows="8" placeholder="粘贴需要检查的分析文本"></textarea>
+
+          <div class="table-section">
+            <h2>待验证预测 <span id="pendingCount">0</span></h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>记录ID</th>
+                  <th>监测标的</th>
+                  <th>评估指标</th>
+                  <th>预判方向</th>
+                  <th>置信度</th>
+                  <th>数据来源</th>
+                  <th>验证阈值</th>
+                </tr>
+              </thead>
+              <tbody id="pendingTable"></tbody>
+            </table>
+          </div>
+
+          <div class="table-section">
+            <h2>异常拦截记录 <span id="errorCount">0</span></h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>工作流</th>
+                  <th>模块</th>
+                  <th>错误详情</th>
+                </tr>
+              </thead>
+              <tbody id="errorTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 量化知识库视图 -->
+      <section class="view" id="view-knowledge">
+        <header class="topbar">
+          <div class="ticker-strip">
+            <span>量化先验知识库</span>
+          </div>
+          <button class="icon-button" type="button" id="refreshKnowledge" title="重新载入规则">↻</button>
+        </header>
+        <div class="view-content">
+          <pre class="text-surface" id="knowledgeText">加载中...</pre>
+        </div>
+      </section>
+
+      <!-- 研报合规检查视图 -->
+      <section class="view" id="view-neutrality">
+        <header class="topbar">
+          <div class="ticker-strip">
+            <span>研报情绪与合规监测</span>
+          </div>
+          <button class="icon-button" type="button" id="runNeutrality" title="执行扫描">▶</button>
+        </header>
+        <div class="view-content">
+          <textarea id="neutralityInput" class="wide-textarea" placeholder="在此粘贴需要检查的主观描述文本..."></textarea>
           <div class="finding-list" id="neutralityResult">
-            <p class="empty-state">检查结果会显示在这里。</p>
+            <p class="empty-state">等待执行扫描。</p>
           </div>
-        </section>
-      </main>
-    </div>
+        </div>
+      </section>
+    </main>
+  </div>
 
-    <script src="/app.js"></script>
-  </body>
+  <button type="button" id="refreshStatus" style="display:none;" aria-hidden="true"></button>
+  <script src="/app.js"></script>
+</body>
+
 </html>

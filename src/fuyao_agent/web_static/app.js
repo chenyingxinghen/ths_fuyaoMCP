@@ -188,7 +188,7 @@ function bindCacheActions(cache, payload) {
 
 function formatDuration(seconds) {
   const value = Number(seconds);
-  if (!Number.isFinite(value) || value < 0) return "n/a";
+  if (!Number.isFinite(value) || value < 0) return "暂无";
   if (value < 60) return `${Math.round(value)} 秒`;
   const minutes = Math.round(value / 60);
   if (minutes < 60) return `${minutes} 分钟`;
@@ -357,7 +357,7 @@ function renderObservations(items) {
       <details class="observation-item">
         <summary>
           <span class="sequence">${String(index + 1).padStart(2, "0")}</span>
-          <strong>${escapeHtml(item.tool_name || "unknown_tool")}</strong>
+          <strong>${escapeHtml(item.tool_name || "未知工具")}</strong>
         </summary>
         <pre>${escapeHtml(args)}</pre>
         <pre>${escapeHtml(item.result || "")}</pre>
@@ -439,7 +439,7 @@ function renderMemoryStats(stats) {
     ["有效预测", stats.valid_prediction_total],
     ["待复盘", stats.pending_total],
     ["复盘总数", stats.reviewed_total],
-    ["平均得分", stats.average_score == null ? "n/a" : Number(stats.average_score).toFixed(2)],
+    ["平均得分", stats.average_score == null ? "暂无" : Number(stats.average_score).toFixed(2)],
     ["证据链", stats.predictions_with_evidence_total || 0],
     ["结构拒绝", stats.validation_error_total || 0],
     ["运行审计", stats.run_audit_total || 0],
@@ -480,9 +480,9 @@ function renderAudits(rows) {
   body.innerHTML = rows.map((row) => `
     <tr>
       <td>${escapeHtml(row.run_id)}</td>
-      <td>${escapeHtml(row.workflow || "n/a")}</td>
-      <td>${escapeHtml(row.output_audit_status || "n/a")}</td>
-      <td>${escapeHtml(row.memory_json_status || "n/a")}</td>
+      <td>${escapeHtml(row.workflow || "暂无")}</td>
+      <td>${escapeHtml(row.output_audit_status || "暂无")}</td>
+      <td>${escapeHtml(row.memory_json_status || "暂无")}</td>
       <td>${escapeHtml(`${row.accepted_prediction_count || 0}/${row.prediction_count || 0}`)}</td>
       <td>${escapeHtml(formatList(row.missing_tools))}</td>
       <td>${escapeHtml(formatList(row.signal_families))}</td>
@@ -501,10 +501,10 @@ function renderPending(rows) {
   body.innerHTML = rows.map((row) => `
     <tr>
       <td>${escapeHtml(row.id)}</td>
-      <td>${escapeHtml(row.target || row.target_id || "unknown")}</td>
-      <td>${escapeHtml(row.metric || "n/a")}</td>
-      <td>${escapeHtml(row.expected_direction || "n/a")}</td>
-      <td>${escapeHtml(row.confidence ?? "n/a")}</td>
+      <td>${escapeHtml(row.target || row.target_id || "未知")}</td>
+      <td>${escapeHtml(row.metric || "暂无")}</td>
+      <td>${escapeHtml(row.expected_direction || "暂无")}</td>
+      <td>${escapeHtml(row.confidence ?? "暂无")}</td>
       <td>${escapeHtml(formatEvidence(row.evidence))}</td>
       <td>${escapeHtml(formatCondition(row.condition))}</td>
     </tr>
@@ -520,21 +520,21 @@ function renderValidationErrors(rows) {
   }
   body.innerHTML = rows.map((row) => `
     <tr>
-      <td>${escapeHtml(row.created_at || "n/a")}</td>
-      <td>${escapeHtml(row.workflow || "n/a")}</td>
-      <td>${escapeHtml(row.item_type || "n/a")}</td>
+      <td>${escapeHtml(row.created_at || "暂无")}</td>
+      <td>${escapeHtml(row.workflow || "暂无")}</td>
+      <td>${escapeHtml(row.item_type || "暂无")}</td>
       <td>${escapeHtml((row.errors || []).join("; "))}</td>
     </tr>
   `).join("");
 }
 
 function formatEvidence(evidence) {
-  if (!Array.isArray(evidence) || !evidence.length) return "n/a";
+  if (!Array.isArray(evidence) || !evidence.length) return "暂无";
   return [...new Set(evidence.map((item) => item.tool_name).filter(Boolean))].join(", ");
 }
 
 function formatCondition(condition) {
-  if (!condition || typeof condition !== "object") return "n/a";
+  if (!condition || typeof condition !== "object") return "暂无";
   if (condition.operator === "between") {
     return `${condition.metric} between ${condition.lower} and ${condition.upper}`;
   }
@@ -542,23 +542,23 @@ function formatCondition(condition) {
 }
 
 function formatRate(value) {
-  if (value == null) return "n/a";
+  if (value == null) return "暂无";
   return `${(Number(value) * 100).toFixed(2)}%`;
 }
 
 function formatScore(value) {
-  if (value == null) return "n/a";
+  if (value == null) return "暂无";
   return Number(value).toFixed(2);
 }
 
 function formatTopMetric(items) {
-  if (!Array.isArray(items) || !items.length) return "n/a";
+  if (!Array.isArray(items) || !items.length) return "暂无";
   const item = items[0];
   return `${item.key}: ${formatRate(item.hit_rate)}`;
 }
 
 function formatList(items) {
-  if (!Array.isArray(items) || !items.length) return "n/a";
+  if (!Array.isArray(items) || !items.length) return "暂无";
   return items.join(", ");
 }
 

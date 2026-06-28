@@ -1,33 +1,83 @@
-# Repository Guidelines
+# Fuyao ModelScope MCP Agent — AGENTS.md
 
-## Project Structure & Module Organization
+## Commands
 
-This is a Python 3.11 `src`-layout package. Core code lives in `src/fuyao_agent/`: `cli.py` defines the `fuyao-agent` command, `agent.py` handles the chat/tool loop, `mcp_hub.py` manages Fuyao MCP connections, `workflows.py` stores built-in workflow prompts, and `memory.py`, `prediction_schema.py`, and `scoring.py` handle prediction persistence and review logic. Knowledge assets live in `docs/knowledge/`. Runtime data belongs in `.fuyao-memory/`, and local secrets belong in `.env`. No tests are currently committed; add them under `tests/` mirroring package modules.
+| What | Command |
+|---|---|
+| Ask a question | `fuyao-agent "query"` or `python -m fuyao_agent "query"` |
+| Web UI (port :8765) | `fuyao-agent-web` |
+| Run workflow | `fuyao-agent --workflow market-weather "query"` or `--skill stock-analysis` |
+| List tools | `fuyao-agent --list-tools` |
+| List workflows | `fuyao-agent --list-workflows` |
+| Show injected knowledge | `fuyao-agent --show-knowledge` |
+| Check subjective wording | `fuyao-agent --check-neutrality "text"` |
+| Pending predictions | `fuyao-agent --memory-pending` |
+| Memory statistics | `fuyao-agent --memory-stats` |
+| Validation errors | `fuyao-agent --memory-errors` |
+| Run audits | `fuyao-agent --memory-audits` / `--memory-audit-run <id>` |
+| Performance summary | `fuyao-agent --memory-performance <workflow>` |
+| Run without memory | `fuyao-agent --no-memory` |
 
-## Build, Test, and Development Commands
+## Test
 
-- `python -m venv .venv`: create a local virtual environment.
-- `.\.venv\Scripts\Activate.ps1`: activate it in PowerShell.
-- `pip install -e .`: install the package in editable mode and expose `fuyao-agent`.
-- `fuyao-agent --list-tools`: validate environment variables and MCP connectivity.
-- `fuyao-agent --list-workflows`: list available workflow names.
-- `fuyao-agent --show-knowledge`: print the injected quant knowledge base.
-- `python -m fuyao_agent "上证综指今天表现如何？"`: run via the module entry point.
+```powershell
+python -m unittest discover -s tests
+```
 
-If tests are added, use `python -m pytest`; `pytest` is not currently declared as a project dependency.
+Tests use `unittest.TestCase`. No pytest dependency. All six test files are in `tests/`.
 
-## Coding Style & Naming Conventions
+## Architecture
 
-Use four-space indentation, PEP 8 layout, `from __future__ import annotations`, and type hints for public functions and data structures. Prefer `snake_case` for modules, functions, and variables; `PascalCase` for classes and dataclasses; and `UPPER_SNAKE_CASE` for constants. Keep CLI error messages short and actionable. Put configuration changes in `config.py`, workflow prompt changes in `workflows.py`, and SQLite persistence changes in `memory.py`.
+- Single package `fuyao_agent` under `src/`.
+- Entrypoints defined in `pyproject.toml`: `fuyao-agent` → `fuyao_agent.cli:main`, `fuyao-agent-web` → `fuyao_agent.web:main`.
+- Build: `hatchling`. Install: `pip install -e .`
+- MCP client connects to remote HTTP endpoints (`https://fuyao.aicubes.cn/mcp/{meta,a-share,a-share-index}`). Auth via `X-api-key` header (set from `FUYAO_API_KEY`).
+- ModelScope LLM via OpenAI-compatible API (`MODELSCOPE_BASE_URL`, defaults to `https://api-inference.modelscope.cn/v1`).
+- Quant knowledge base injected into every system prompt from `docs/knowledge/open_source_quant_ai.md`.
+- Autofill: `get_a_share_special_data_limit_up_pool` auto-resolves `date_ms` from calendar when omitted (`mcp_hub.py:99-129`).
 
-## Testing Guidelines
+## Key conventions
 
-Name tests `tests/test_<module>.py`. Mock ModelScope and Fuyao MCP calls; tests should not require real API keys or network access. Prioritize coverage for CLI argument handling, environment parsing, workflow rendering, prediction schema validation, scoring outcomes, and memory database reads/writes. Use temporary SQLite paths instead of `.fuyao-memory/`.
+- **Config**: `.env` (load with `Copy-Item .env.example .env`). Required vars: `MODELSCOPE_API_KEY`, `FUYAO_API_KEY`. Optional: `MODELSCOPE_BASE_URL`, `MODELSCOPE_MODEL`, `FUYAO_BASE_URL`, `FUYAO_MCP_SERVERS`, `FUYAO_MEMORY_DB`.
+- **Memory**: SQLite at `.fuyao-memory/memory.sqlite3`. Stores predictions, reviews, lessons, observations, run audits, validation errors.
+- **Prediction confidence** must be in `[0, 0.75]`. System auto-scores hit/miss from `condition`; model must write `outcome: "unknown"` and `score: null`.
+- **`analysis_trade_date`** (the date used for analysis) **≠ `prediction_trade_date`** (the next verifiable date). Predictions must use the latter.
+- **Bad output triggers `validation_errors`**: missing required output sections, subjective terms, invalid MEMORY_JSON structure, mismatched metric/scope, missing tool evidence, duplicate predictions, generic rationale/lesson/validation_query.
+- **Workflow outputs must follow a fixed section order** (see `memory.py:37-59`). `market-weather` requires 3-6 predictions covering ≥2 signal families (index, breadth, liquidity). `stock-analysis` requires ≥2 signal families when generating >1 prediction.
+- **Subjective terms** to avoid in factual sections: 火爆, 惨淡, 疯狂, 强势, 弱势, 恐慌, 乐观, 悲观, 活跃, 发酵, 意愿, 尚可, 明显, 中幅, 大幅, 小幅, etc. (full list in `neutrality.py:6-27`).
+- **`MEMORY_JSON`** must appear at the end with `reviews`, `predictions`, `lessons` arrays inside a ` ```json` fence.
+- **Review fields**: `actual_value` must be finite numeric (count→non-negative int, index_close→positive); `actual_summary` must mention metric, tool, and value; `source_tool` must be from current run's observations; `source_tool` must be compatible with `actual_metric`.
+- **`condition.unit`** is required: `pct` for percent metrics, `count` for limit_up/consecutive, `points` for index_close.
+- **`target_id`** for stock scope must be `600519.SH`-like; for index scope must be `000001.SH`-like.
 
-## Commit & Pull Request Guidelines
+## File layout
 
-No local Git history is available in this workspace, so no repository-specific commit convention can be inferred. Use concise imperative subjects such as `Add daily forecast scoring tests`, and keep related changes in one commit. Pull requests should include purpose, behavior changes, commands run, configuration or migration notes, and terminal output or screenshots for user-facing CLI changes. Link issues when relevant.
+```
+src/fuyao_agent/
+  cli.py              # CLI entrypoint (argparse)
+  agent.py            # Core agent loop (MCP + OpenAI tool calling)
+  mcp_hub.py          # FuyaoMcpHub: connects to MCP HTTP endpoints
+  workflows.py        # Workflow dataclass + prompt templates
+  memory.py           # MemoryStore (SQLite), MEMORY_JSON parsing
+  prediction_schema.py # Validation for predictions/reviews/lessons
+  scoring.py          # Auto-score condition evaluation
+  neutrality.py       # Subjective term detection
+  knowledge.py        # Quant knowledge injection
+  markdown.py         # Decode escaped markdown from LLM output
+  config.py           # .env loading, settings dataclass
+  web.py              # HTTP API + static file server
+tests/
+  test_config.py
+  test_markdown.py
+  test_memory.py
+  test_prediction_schema.py
+  test_scoring.py
+  test_workflows.py
+docs/knowledge/open_source_quant_ai.md  # Injected system prompt knowledge base
+```
 
-## Security & Configuration Tips
+## Per-workflow required tools (enforced at runtime)
 
-Copy `.env.example` to `.env` and never commit secrets. Required keys are `MODELSCOPE_API_KEY` and `FUYAO_API_KEY`. Do not commit generated files from `.venv/`, `__pycache__/`, `.pytest_cache/`, `dist/`, `build/`, or `.fuyao-memory/`. Preserve neutral, data-first language when modifying financial analysis workflows.
+**market-weather**: `get_a_share_calendar_trading_days`, `get_a_share_index_prices_snapshot`, `get_a_share_special_data_limit_up_pool`, `get_a_share_special_data_limit_up_ladder`.
+
+**stock-analysis**: `get_a_share_calendar_trading_days`, `get_a_share_prices_snapshot`, `get_a_share_prices_historical`.
